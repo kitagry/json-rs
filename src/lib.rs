@@ -46,6 +46,16 @@ impl ParseError {
     }
 }
 
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.value {
+            ParseErrorType::UnexpectedString(s) => write!(f, "{}: expect {}", self.loc, s),
+            ParseErrorType::UnexpectedChar(c) => write!(f, "{}: expect {}", self.loc, c),
+            ParseErrorType::EOF => write!(f, "{}: EOF", self.loc),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Number {
     Int(i128),
@@ -99,7 +109,7 @@ impl fmt::Display for Value {
             Value::Null => write!(f, "null"),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Number(n) => write!(f, "{}", n),
-            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::String(s) => write!(f, "{}", s),
             Value::Array(v) => {
                 let v = v
                     .iter()
@@ -147,7 +157,8 @@ impl fmt::Display for Value {
 pub fn from_str(data: String) -> Result<Value, ParseError> {
     let bytes = data.as_bytes();
 
-    match read_single(bytes, 0) {
+    let pos = skip_space(bytes, 0);
+    match read_single(bytes, pos) {
         Ok((v, _)) => Ok(v),
         Err(e) => Err(e),
     }
@@ -239,14 +250,14 @@ fn read_number(bytes: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
 
 fn read_array(data: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
     let mut contents: Vec<Value> = vec![];
-    let mut cur = skip_space(data, pos + 1);
+    let cur = skip_space(data, pos + 1);
     if data[cur] == b']' {
         return Ok((Value::Array(contents), cur));
     }
 
-    let (content, c) = read_single(data, cur)?;
-    cur = c;
+    let (content, cur) = read_single(data, cur)?;
     contents.push(content);
+    let mut cur = skip_space(data, cur);
 
     while data.len() > cur && data[cur] == b',' {
         cur = skip_space(data, cur + 1);
@@ -269,7 +280,7 @@ fn read_single_obj(data: &[u8], pos: usize) -> Result<(String, Value, usize), Pa
             return Err(ParseError::unexpected_char(':', Loc(cur, cur + 1)));
         }
         cur = skip_space(data, cur + 1);
-        let (obj, cur) = read_string(data, cur).unwrap();
+        let (obj, cur) = read_single(data, cur).unwrap();
         return Ok((s, obj, cur));
     }
     Err(ParseError::eof(Loc(pos, pos + 1)))
@@ -281,12 +292,14 @@ fn read_obj(data: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
         return Err(ParseError::unexpected_char('{', Loc(pos, pos + 1)));
     }
 
-    let (s, v, mut cur) = read_single_obj(data, pos + 1).unwrap();
+    let cur = skip_space(data, pos + 1);
+    let (s, v, mut cur) = read_single_obj(data, cur).unwrap();
     hash_map.insert(s, v);
     cur = skip_space(data, cur);
 
     while data.len() > cur && data[cur] == b',' {
-        let (s, v, c) = read_single_obj(data, cur + 1).unwrap();
+        cur = skip_space(data, cur + 1);
+        let (s, v, c) = read_single_obj(data, cur).unwrap();
         hash_map.insert(s, v);
         cur = skip_space(data, c);
     }
