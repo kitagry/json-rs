@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::ops::Index;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Loc(usize, usize);
@@ -26,7 +27,6 @@ impl<T> Annot<T> {
 pub enum ParseErrorType {
     UnexpectedString(String),
     UnexpectedChar(char),
-    NotFound(char),
     EOF,
 }
 
@@ -41,10 +41,6 @@ impl ParseError {
         ParseError::new(ParseErrorType::UnexpectedChar(expected), loc)
     }
 
-    fn not_found(expected: char, loc: Loc) -> Self {
-        ParseError::new(ParseErrorType::NotFound(expected), loc)
-    }
-
     fn eof(loc: Loc) -> Self {
         ParseError::new(ParseErrorType::EOF, loc)
     }
@@ -54,6 +50,15 @@ impl ParseError {
 pub enum Number {
     Int(i128),
     Float(f64),
+}
+
+impl fmt::Display for Number {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Number::Int(i) => write!(f, "{}", i),
+            Number::Float(fl) => write!(f, "{}", fl),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,6 +71,79 @@ pub enum Value {
     Object(HashMap<String, Value>),
 }
 
+impl Index<&str> for Value {
+    type Output = Value;
+
+    fn index(&self, ind: &str) -> &Self::Output {
+        match self {
+            Value::Object(map) => map.get(ind).unwrap_or(&Value::Null),
+            _ => &Value::Null,
+        }
+    }
+}
+
+impl Index<usize> for Value {
+    type Output = Value;
+
+    fn index(&self, ind: usize) -> &Self::Output {
+        match self {
+            Value::Array(ar) => &ar[ind],
+            _ => &Value::Null,
+        }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Value::Null => write!(f, "null"),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Number(n) => write!(f, "{}", n),
+            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::Array(v) => {
+                let v = v
+                    .iter()
+                    .map(|v| format!("{}", v))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "[{}]", v)
+            }
+            Value::Object(h) => {
+                let h = h
+                    .iter()
+                    .map(|(key, value)| format!("\"{}\": {}", key, value))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "{{{}}}", h)
+            }
+        }
+    }
+}
+
+/// from_str is parse json string.
+///
+/// # Examples
+///
+/// ```
+/// use json_rs::{from_str, Value};
+///
+/// fn main() {
+///     let data = r#"
+///     {
+///         "name": "John Doe",
+///         "age": 43,
+///         "phones": [
+///             "+81 4444",
+///             "+81 4444"
+///         ]
+///     }
+///     "#;
+///
+///     let v: Value = from_str(data.to_string()).unwrap_or(Value::Null);
+///
+///     println!("Please call {} at the number {}", v["name"], v["phones"][0]);
+/// }
+/// ```
 pub fn from_str(data: String) -> Result<Value, ParseError> {
     let bytes = data.as_bytes();
 
@@ -114,7 +192,7 @@ fn read_string(data: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
     use std::str::from_utf8;
 
     if data[pos] != b'"' {
-        return Err(ParseError::not_found('"', Loc(pos, pos + 1)));
+        return Err(ParseError::unexpected_char('"', Loc(pos, pos + 1)));
     }
 
     let mut cur: usize = pos + 1;
@@ -128,7 +206,7 @@ fn read_string(data: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
             cur + 1,
         ))
     } else {
-        Err(ParseError::not_found('"', Loc(pos, cur)))
+        Err(ParseError::unexpected_char('"', Loc(pos, cur)))
     }
 }
 
@@ -179,7 +257,7 @@ fn read_array(data: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
     }
 
     if data.len() <= cur || data[cur] != b']' {
-        return Err(ParseError::not_found(']', Loc(pos, cur)));
+        return Err(ParseError::unexpected_char(']', Loc(pos, cur)));
     }
 
     Ok((Value::Array(contents), cur + 1))
@@ -200,7 +278,7 @@ fn read_single_obj(data: &[u8], pos: usize) -> Result<(String, Value, usize), Pa
 fn read_obj(data: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
     let mut hash_map = HashMap::new();
     if data[pos] != b'{' {
-        return Err(ParseError::not_found('{', Loc(pos, pos + 1)));
+        return Err(ParseError::unexpected_char('{', Loc(pos, pos + 1)));
     }
 
     let (s, v, mut cur) = read_single_obj(data, pos + 1).unwrap();
@@ -214,7 +292,7 @@ fn read_obj(data: &[u8], pos: usize) -> Result<(Value, usize), ParseError> {
     }
 
     if cur >= data.len() || data[cur] != b'}' {
-        return Err(ParseError::not_found('}', Loc(pos, cur)));
+        return Err(ParseError::unexpected_char('}', Loc(pos, cur)));
     }
 
     Ok((Value::Object(hash_map), cur + 1))
@@ -325,11 +403,11 @@ mod tests {
             },
             Test {
                 input: "\"hello".to_string(),
-                output: ParseError::not_found('"', Loc(0, 6)),
+                output: ParseError::unexpected_char('"', Loc(0, 6)),
             },
             Test {
                 input: "[\"hello\"".to_string(),
-                output: ParseError::not_found(']', Loc(0, 8)),
+                output: ParseError::unexpected_char(']', Loc(0, 8)),
             },
         ];
 
